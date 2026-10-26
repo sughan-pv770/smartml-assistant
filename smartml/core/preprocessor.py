@@ -60,6 +60,32 @@ class Preprocessor:
             steps.append(f"Dropped {len(const_cols)} constant column(s): {const_cols}.")
 
         report: DatasetReport = analyze(work, target=None)
+
+        # 2b. Expand datetime columns into numeric parts
+        for col in report.datetime_cols:
+            if col == target:
+                continue
+            try:
+                s = pd.to_datetime(work[col], errors="coerce")
+                work[f"{col}_year"] = s.dt.year.fillna(0).astype(int)
+                work[f"{col}_month"] = s.dt.month.fillna(0).astype(int)
+                work[f"{col}_day"] = s.dt.day.fillna(0).astype(int)
+                work[f"{col}_dayofweek"] = s.dt.dayofweek.fillna(0).astype(int)
+                work = work.drop(columns=[col])
+                steps.append(f"Expanded datetime column '{col}' into year, month, day, dayofweek components.")
+            except Exception:
+                work = work.drop(columns=[col])
+                steps.append(f"Dropped unparseable datetime column '{col}'.")
+
+        # 2c. Drop free text columns (high word count)
+        for col in report.text_cols:
+            if col == target:
+                continue
+            work = work.drop(columns=[col])
+            steps.append(f"Dropped free-text column '{col}' to prevent unencoded text features.")
+
+        # Re-profile after datetime expansion and text column drops
+        report = analyze(work, target=None)
         numeric_cols = [c for c in report.numeric_cols if c != target]
         categorical_cols = [c for c in report.categorical_cols if c != target]
         # treat booleans as categorical for encoding purposes

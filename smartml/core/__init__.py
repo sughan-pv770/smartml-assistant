@@ -46,6 +46,15 @@ from . import (
     loaders,
     clustering,
     anomaly,
+    wrangler,
+    stats,
+    reducer,
+    tuner,
+    forecaster,
+    textutil,
+    semi_supervised,
+    reinforcement,
+    self_supervised,
 )
 
 __all__ = [
@@ -61,4 +70,13 @@ __all__ = [
     "loaders",
     "clustering",
     "anomaly",
+    "wrangler",
+    "stats",
+    "reducer",
+    "tuner",
+    "forecaster",
+    "textutil",
+    "semi_supervised",
+    "reinforcement",
+    "self_supervised",
 ]

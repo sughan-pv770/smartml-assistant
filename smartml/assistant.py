@@ -54,6 +54,7 @@ from .core import (
     anomaly,
     loaders,
 )
+from .assistant_ds import DataScienceMixin
 
 _log = logging.getLogger("smartml")
 
@@ -106,11 +107,19 @@ class Session:
     loaded_bundle: Optional[persistence.SavedBundle] = None
 
     history: list = field(default_factory=list)
+    wrangler: Optional[Any] = None
 
     def __post_init__(self) -> None:
         os.makedirs(self.output_dir, exist_ok=True)
         if self.target:
             self.dataset_report = analyzer.analyze(self.raw_df, target=self.target)
+
+    @property
+    def df(self) -> pd.DataFrame:
+        """The currently active DataFrame (cleaned if available, else raw)."""
+        if self.cleaning_result is not None:
+            return self.cleaning_result.df
+        return self.raw_df
 
 
 # --------------------------------------------------------------------------- #
@@ -141,6 +150,7 @@ _INTENT_PATTERNS: list[tuple[str, str]] = [
     (r"\bvisuali[sz]e\b|\bplot\b|\bchart\b",                       "_handle_visualize"),
     (r"\b(generate|build|create|make|export)\b.*\breport\b|^report$",
                                                                    "_handle_report"),
+    (r"\b(do everything|full pipeline|run all|end to end)\b",      "_handle_do_everything"),
     (r"\btrain\b|\bfind\b.*\b(best )?model\b|\bbuild\b.*\bmodel\b"
      r"|\bbest model\b|\bfit\b.*\bmodel\b",                        "_handle_train"),
 ]
@@ -164,7 +174,7 @@ _PATH_RE = re.compile(r"[\w\-./\\]+\.(csv|xlsx?|json|parquet|feather)", re.IGNOR
 # Assistant
 # --------------------------------------------------------------------------- #
 
-class Assistant:
+class Assistant(DataScienceMixin):
     """Conversational front-end over the SmartML engine.
 
     Args:
@@ -191,9 +201,9 @@ class Assistant:
         self.session = Session(raw_df=df, target=target, output_dir=output_dir)
         self._greet()
 
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
+    def set_target(self, target: str) -> str:
+        """Sets the target column for machine learning."""
+        return self.ask(f"set target to {target}")
 
     def ask(self, text: str, **context: Any) -> str:
         """Send a natural-language command to the assistant.
@@ -220,6 +230,28 @@ class Assistant:
         })
         normalised = text.strip().lower()
 
+        # 1. Try Data Science / Wrangling / Stats intents first
+        try:
+            ds_reply = self._ds_dispatch(text, normalised, **context)
+            if ds_reply is not None:
+                self.session.history.append({
+                    "role": "assistant",
+                    "text": ds_reply,
+                    "time": dt.datetime.now().isoformat(),
+                })
+                _log.info("[assistant] %s", ds_reply[:200])
+                return ds_reply
+        except Exception as exc:
+            _log.exception("DataScience intent handler raised: %s", exc)
+            err_reply = f"That data science command hit an unexpected error: {exc}"
+            self.session.history.append({
+                "role": "assistant",
+                "text": err_reply,
+                "time": dt.datetime.now().isoformat(),
+            })
+            return err_reply
+
+        # 2. Try Core AutoML intent patterns
         handler_name: Optional[str] = None
         for pattern, name in _INTENT_PATTERNS:
             if re.search(pattern, normalised):
@@ -317,6 +349,12 @@ class Assistant:
             )
         self.session.target = col
         self.session.dataset_report = analyzer.analyze(self.session.raw_df, target=col)
+        # Reset downstream artifacts since the target definition changed
+        self.session.cleaning_result = None
+        self.session.feature_engineering_result = None
+        self.session.feature_selection_result = None
+        self.session.training_result = None
+        self.session.importance_result = None
         return f"Target set to '{col}'. {self.session.dataset_report.task_reason}"
 
     def _handle_analyze(self, text: str, norm: str, **ctx: Any) -> str:
@@ -402,8 +440,8 @@ class Assistant:
         )
         X = df_work.drop(columns=[self.session.target], errors="ignore")
         y = (
-            self.session.raw_df.loc[df_work.index, self.session.target]
-            if self.session.target
+            self.session.cleaning_result.df[self.session.target]
+            if self.session.target and self.session.target in self.session.cleaning_result.df.columns
             else None
         )
         report = self.session.dataset_report or analyzer.analyze(
@@ -460,7 +498,7 @@ class Assistant:
                 columns=[self.session.target], errors="ignore"
             )
 
-        y = self.session.raw_df.loc[X.index, self.session.target]
+        y = self.session.cleaning_result.df[self.session.target]
 
         tr = trainer_mod.Trainer(task=task)
         result = tr.run(X, y)
@@ -479,6 +517,47 @@ class Assistant:
         lines.append(result.best_reason)
         return "\n".join(lines)
 
+    def _handle_do_everything(self, text: str, norm: str, **ctx: Any) -> str:
+        """Run the full end-to-end pipeline: analyze, clean, train, importance, plots, report, save."""
+        if not self.session.target:
+            return "I need a target column first — try \"set target to <column name>\"."
+
+        summary_lines = ["Executing full AutoML pipeline:"]
+
+        # 1. Analyze
+        self._handle_analyze("analyze", "analyze")
+        summary_lines.append("[x] Profiled dataset")
+
+        # 2. Clean
+        self._handle_clean("clean", "clean")
+        summary_lines.append("[x] Preprocessed and cleaned data")
+
+        # 3. Train
+        train_reply = self._handle_train("train the best model", "train the best model")
+        best_name = self.session.training_result.best_name if self.session.training_result else "Unknown"
+        summary_lines.append(f"[x] Trained and compared models — winner: {best_name}")
+
+        # 4. Feature importance
+        self._handle_feature_importance("feature importance", "feature importance")
+        summary_lines.append("[x] Computed feature importance")
+
+        # 5. Visualizations
+        self._handle_visualize("plot everything", "plot everything")
+        summary_lines.append(f"[x] Generated {len(self.session.visualizations)} plot(s)")
+
+        # 6. Report
+        report_path = self._handle_report("generate report", "generate report")
+        summary_lines.append("[x] Generated full HTML report")
+
+        # 7. Save model
+        save_reply = self._handle_save_model("save model", "save model")
+        summary_lines.append("[x] Saved best model bundle")
+
+        if self.session.training_result:
+            summary_lines.append(f"\nResult: {self.session.training_result.best_reason}")
+
+        return "\n".join(summary_lines)
+
     def _handle_clustering(self, text: str, norm: str, **ctx: Any) -> str:
         # Extract optional k from text (e.g. "cluster into 4 groups")
         k: Optional[int] = None
@@ -486,8 +565,15 @@ class Assistant:
         if m:
             k = int(m.group(1))
 
+        # Hard Rule: isolate target from clustering
+        df_cluster = (
+            self.session.raw_df.drop(columns=[self.session.target], errors="ignore")
+            if self.session.target
+            else self.session.raw_df
+        )
+
         ct = clustering.ClusteringTrainer(n_clusters=k)
-        result = ct.run(self.session.raw_df)
+        result = ct.run(df_cluster)
         self.session.clustering_result = result
         return (
             f"Clustering complete ({result.algorithm}):\n"
@@ -499,8 +585,14 @@ class Assistant:
         )
 
     def _handle_anomaly(self, text: str, norm: str, **ctx: Any) -> str:
+        # Hard Rule: isolate target from anomaly detection
+        df_anomaly = (
+            self.session.raw_df.drop(columns=[self.session.target], errors="ignore")
+            if self.session.target
+            else self.session.raw_df
+        )
         det = anomaly.AnomalyDetector()
-        result = det.detect(self.session.raw_df)
+        result = det.detect(df_anomaly)
         self.session.anomaly_result = result
         return (
             f"Anomaly detection complete ({result.algorithm}):\n"

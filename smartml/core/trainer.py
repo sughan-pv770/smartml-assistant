@@ -400,7 +400,7 @@ class Trainer:
         text = (
             f"{best.name} was selected because it achieved the highest "
             f"cross-validated {metric_name} of {best.cv_score:.4f} "
-            f"(± {best.cv_std:.4f})"
+            f"(+/- {best.cv_std:.4f})"
         )
         if runner_up is not None:
             margin = best.cv_score - runner_up.cv_score

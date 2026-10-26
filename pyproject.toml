@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartml-assistant"
-version = "0.2.0"
-description = "A production-grade AutoML engine with a conversational Assistant interface."
+version = "2.0.2"
+description = "A production-grade Multi-Paradigm AutoML & Data Science engine (Supervised, Unsupervised, Semi-supervised, Reinforcement, Self-supervised)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "SmartML Contributors", email = "contributors@smartml.org" }]
-keywords = ["automl", "machine-learning", "assistant", "sklearn", "explainable-ai"]
+keywords = ["automl", "machine-learning", "reinforcement-learning", "semi-supervised", "self-supervised", "forecasting", "data-science", "sklearn"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -28,14 +28,14 @@ dependencies = [
     "scikit-learn>=1.3",
     "matplotlib>=3.7",
     "joblib>=1.3",
+    "scipy>=1.10",
 ]
 
 [project.urls]
-Homepage = "https://github.com/smartml-contributors/smartml-assistant"
-Repository = "https://github.com/smartml-contributors/smartml-assistant"
-Documentation = "https://github.com/smartml-contributors/smartml-assistant#readme"
-"Bug Tracker" = "https://github.com/smartml-contributors/smartml-assistant/issues"
-
+Homepage = "https://github.com/sughan-pv770/smartml-assistant"
+Repository = "https://github.com/sughan-pv770/smartml-assistant"
+Documentation = "https://github.com/sughan-pv770/smartml-assistant#readme"
+"Bug Tracker" = "https://github.com/sughan-pv770/smartml-assistant/issues"
 
 [project.optional-dependencies]
 boosting = ["xgboost>=2.0", "lightgbm>=4.0", "catboost>=1.2"]

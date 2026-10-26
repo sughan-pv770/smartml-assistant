@@ -53,11 +53,18 @@ from .core import (
     feature_engineer,
     feature_selector,
     loaders,
-    clustering,
+    clustering as clustering_mod,
     anomaly,
+    semi_supervised as semi_supervised_mod,
+    reinforcement as reinforcement_mod,
+    self_supervised as self_supervised_mod,
+    forecaster as forecaster_mod,
+    reducer as reducer_mod,
+    stats as stats_mod,
+    wrangler as wrangler_mod,
 )
 
-__version__ = "0.2.0"
+__version__ = "2.0.2"
 __author__ = "SmartML Contributors"
 __license__ = "MIT"
 
@@ -66,11 +73,16 @@ __license__ = "MIT"
 logging.getLogger("smartml").addHandler(logging.NullHandler())
 
 __all__ = [
-    # High-level API
+    # High-level API for all ML Paradigms
     "auto",
     "regression",
     "classification",
+    "clustering",
     "clustering_pipeline",
+    "semi_supervised",
+    "reinforcement",
+    "self_supervised",
+    "forecast",
     "load",
     # Core classes
     "Assistant",
@@ -81,14 +93,21 @@ __all__ = [
     "preprocessor",
     "feature_engineer",
     "feature_selector",
-    "trainer",
+    "trainer_mod",
     "explainer",
     "visualizer",
     "reporter",
     "persistence",
     "loaders",
-    "clustering",
+    "clustering_mod",
     "anomaly",
+    "semi_supervised_mod",
+    "reinforcement_mod",
+    "self_supervised_mod",
+    "forecaster_mod",
+    "reducer_mod",
+    "stats_mod",
+    "wrangler_mod",
 ]
 
 
@@ -260,6 +279,27 @@ class SmartMLResult:
     # String representation
     # ------------------------------------------------------------------ #
 
+    @property
+    def summary(self) -> str:
+        """Executive summary and leaderboard of the completed run."""
+        if self.training_result:
+            tr = self.training_result
+            lines = [
+                f"SmartML {self.task.capitalize()} Result:",
+                f"  Best Model: {tr.best_name}",
+                f"  Summary: {tr.best_reason}",
+                f"  Leaderboard:"
+            ]
+            for i, entry in enumerate(tr.leaderboard, 1):
+                marker = " <- best" if i == 1 else ""
+                metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in list(entry.test_metrics.items())[:3])
+                lines.append(f"    {i}. {entry.name}: CV={entry.cv_score:.4f}+/-{entry.cv_std:.4f} | {metrics_str}{marker}")
+            return "\n".join(lines)
+        if self.clustering_result:
+            cr = self.clustering_result
+            return f"SmartML Clustering Result:\n  Algorithm: {cr.algorithm}\n  Clusters: {cr.n_clusters}\n  Silhouette: {cr.silhouette:.4f}"
+        return f"SmartML Result (task={self.task!r})"
+
     def __repr__(self) -> str:  # noqa: D105
         if self.training_result:
             return (
@@ -322,7 +362,7 @@ def auto(
     logger.info("Cleaning: %d step(s) applied.", len(cleaning.steps))
 
     X = cleaning.df.drop(columns=[target], errors="ignore")
-    y = data.loc[cleaning.df.index, target]
+    y = cleaning.df[target]
 
     tr = trainer_mod.Trainer(task=detected_task)
     training = tr.run(X, y)
@@ -403,7 +443,7 @@ def clustering_pipeline(
     logger = logging.getLogger("smartml")
     logger.info("SmartML.clustering: dataset (%d rows, %d cols)", *data.shape)
 
-    ct = clustering.ClusteringTrainer(
+    ct = clustering_mod.ClusteringTrainer(
         algorithm=algorithm, n_clusters=n_clusters
     )
     result = ct.run(data)
@@ -440,3 +480,97 @@ def load(path: str, **kwargs: Any) -> pd.DataFrame:
         df = sml.load("sales_2024.parquet")
     """
     return loaders.load(path, **kwargs)
+
+
+def clustering(
+    data: pd.DataFrame,
+    algorithm: str = "auto",
+    n_clusters: Optional[int] = None,
+    output_dir: str = "smartml_output",
+) -> SmartMLResult:
+    """Run an unsupervised clustering pipeline (alias of clustering_pipeline)."""
+    return clustering_pipeline(data, algorithm=algorithm, n_clusters=n_clusters, output_dir=output_dir)
+
+
+def semi_supervised(
+    data: pd.DataFrame,
+    target: str,
+    algorithm: str = "auto",
+    unlabeled_identifier: int = -1,
+    random_state: int = 42,
+) -> semi_supervised_mod.SemiSupervisedResult:
+    """Run semi-supervised learning on partially labeled tabular data.
+
+    Args:
+        data: Input DataFrame.
+        target: Target column containing labeled entries and unlabeled marks (-1 or NaN).
+        algorithm: 'self_training', 'label_spreading', 'label_propagation', or 'auto'.
+        unlabeled_identifier: Marker for unlabeled rows (default -1).
+        random_state: Seed for reproducibility.
+    """
+    if target not in data.columns:
+        raise KeyError(f"Target column '{target}' not found.")
+    X = data.drop(columns=[target], errors="ignore")
+    y = data[target]
+    trainer = semi_supervised_mod.SemiSupervisedTrainer(
+        algorithm=algorithm, unlabeled_identifier=unlabeled_identifier, random_state=random_state
+    )
+    return trainer.fit(X, y)
+
+
+def reinforcement(
+    data: pd.DataFrame,
+    action: str,
+    reward: str,
+    context_cols: Optional[list[str]] = None,
+    strategy: str = "auto",
+    **kwargs: Any,
+) -> reinforcement_mod.BanditResult:
+    """Run offline tabular contextual bandit / reinforcement decision optimization.
+
+    Args:
+        data: Logged interaction dataset.
+        action: Column indicating action/arm taken.
+        reward: Column indicating observed outcome/reward.
+        context_cols: Optional list of state/feature columns for contextual bandits (LinUCB).
+        strategy: 'linucb', 'thompson', 'epsilon_greedy', or 'auto'.
+    """
+    opt = reinforcement_mod.TabularBanditOptimizer(strategy=strategy, **kwargs)
+    return opt.optimize(data, action_col=action, reward_col=reward, context_cols=context_cols)
+
+
+def self_supervised(
+    data: pd.DataFrame,
+    target: Optional[str] = None,
+    embedding_dim: Optional[int] = None,
+    **kwargs: Any,
+) -> self_supervised_mod.SelfSupervisedResult:
+    """Extract dense tabular latent representations using Masked/Denoising Autoencoders.
+
+    Args:
+        data: Tabular dataset.
+        target: Optional target column to isolate and exclude from representations.
+        embedding_dim: Latent representation size (default: half of feature count, min 2).
+    """
+    learner = self_supervised_mod.TabularSelfSupervisedLearner(embedding_dim=embedding_dim, **kwargs)
+    return learner.fit_transform(data, target_col=target)
+
+
+def forecast(
+    data: pd.DataFrame,
+    target: str,
+    date_col: Optional[str] = None,
+    horizon: int = 5,
+    **kwargs: Any,
+) -> forecaster_mod.ForecastResult:
+    """Run multi-step recursive time series forecasting with automatic lag features.
+
+    Args:
+        data: Time series or sequential DataFrame.
+        target: Numeric column to forecast.
+        date_col: Optional date/timestamp column. Auto-detected if omitted.
+        horizon: Number of future periods/steps to forecast.
+    """
+    fc = forecaster_mod.TabularForecaster(**kwargs)
+    return fc.forecast(data, target_col=target, date_col=date_col, horizon=horizon)
+
