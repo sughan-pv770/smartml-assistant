@@ -120,6 +120,15 @@ def from_sql(
             connection="sqlite:///hr.sqlite3",
         )
     """
+    # Security guard: Ensure query is strictly a read operation (SELECT or WITH)
+    trimmed = query.strip()
+    first_token = trimmed.split()[0].upper() if trimmed else ""
+    if first_token not in ("SELECT", "WITH"):
+        raise PermissionError(
+            f"Security Violation: from_sql only permits read queries (SELECT / WITH). "
+            f"Received disallowed command starting with '{first_token}'."
+        )
+
     try:
         # Accept both connection strings (SQLAlchemy) and raw connections
         if isinstance(connection, str):

@@ -59,14 +59,25 @@ coverage.xml
 profile_default/
 ipython_config.py
 
-# Environments
+# Environments & Secrets
 .env
+.env.*
+*.env
+*.pem
+*.key
+*.token
+*.secret
+credentials.json
+client_secrets.json
 .venv
-env/
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
 
-# SmartML output
+# SmartML output & artifacts
 smartml_output/
+*.joblib
+linkedin_showcase/
+test_output/

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import html
 import os
 from typing import Optional, Any
 import numpy as np
@@ -108,13 +109,14 @@ def generate_html_report(session, out_path: str) -> str:
     tr = getattr(session, "training_result", None)
     dr = getattr(session, "dataset_report", None)
     cr = getattr(session, "cleaning_result", None)
-    target = getattr(session, "target", "Target")
+    target = html.escape(str(getattr(session, "target", "Target")))
 
     # Metrics summary cards
     n_rows = dr.n_rows if dr else (len(cr.df) if cr and hasattr(cr, "df") else "N/A")
     n_cols = dr.n_cols if dr else (len(cr.df.columns) if cr and hasattr(cr, "df") else "N/A")
-    task_type = (tr.task if tr else (dr.task if dr else "Machine Learning")).capitalize()
-    best_model_name = tr.best_name if tr else "N/A"
+    raw_task = tr.task if tr else (dr.task if dr else "Machine Learning")
+    task_type = html.escape(str(raw_task)).capitalize()
+    best_model_name = html.escape(str(tr.best_name)) if tr else "N/A"
     best_score_str = f"{tr.leaderboard[0].cv_score:.4f}" if tr and tr.leaderboard else "N/A"
     best_metric_name = "F1-Weighted" if tr and tr.task == "classification" else "R² Score"
 
@@ -126,12 +128,13 @@ def generate_html_report(session, out_path: str) -> str:
             highlight = ' class="best-row"' if is_best else ""
             badge = '<span class="badge-winner">Winner</span>' if is_best else f'<span class="rank-badge">#{idx}</span>'
             metrics_pills = " ".join(
-                f'<span class="metric-pill"><b>{k}</b>: {v:.4f}</span>'
+                f'<span class="metric-pill"><b>{html.escape(str(k))}</b>: {v:.4f}</span>'
                 for k, v in entry.test_metrics.items()
             )
+            safe_name = html.escape(str(entry.name))
             leaderboard_rows += f"""
             <tr{highlight}>
-                <td>{badge} <strong>{entry.name}</strong></td>
+                <td>{badge} <strong>{safe_name}</strong></td>
                 <td><span class="cv-score">{entry.cv_score:.4f}</span> <small class="text-muted">± {entry.cv_std:.4f}</small></td>
                 <td>{metrics_pills}</td>
                 <td>{entry.fit_time_s:.2f}s</td>
@@ -143,12 +146,13 @@ def generate_html_report(session, out_path: str) -> str:
     imp_narrative = ""
     if getattr(session, "importance_result", None) is not None:
         imp = session.importance_result
-        imp_narrative = imp.narrative
+        imp_narrative = html.escape(str(imp.narrative))
         for idx, (fname, val) in enumerate(imp.importances.head(10).items(), 1):
             pct = val * 100 if val <= 1.0 else val
+            safe_fname = html.escape(str(fname))
             importance_rows += f"""
             <tr>
-                <td><strong>#{idx}</strong> {fname}</td>
+                <td><strong>#{idx}</strong> {safe_fname}</td>
                 <td>
                     <div class="progress-bar-container">
                         <div class="progress-bar-fill" style="width: {min(100, max(5, pct)):.1f}%;"></div>
@@ -161,7 +165,7 @@ def generate_html_report(session, out_path: str) -> str:
     # Cleaning steps badges
     cleaning_items = ""
     if cr and getattr(cr, "steps", None):
-        cleaning_items = "".join(f'<div class="step-card"><span class="step-check">&#10003;</span> {s}</div>' for s in cr.steps)
+        cleaning_items = "".join(f'<div class="step-card"><span class="step-check">&#10003;</span> {html.escape(str(s))}</div>' for s in cr.steps)
     else:
         cleaning_items = '<div class="step-card">No data cleaning steps were needed; dataset is clean.</div>'
 
@@ -190,6 +194,9 @@ def generate_html_report(session, out_path: str) -> str:
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; script-src 'none';"/>
+<meta http-equiv="X-Content-Type-Options" content="nosniff"/>
+<meta name="referrer" content="no-referrer"/>
 <title>SmartML Executive Report</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -588,8 +595,8 @@ def generate_html_report(session, out_path: str) -> str:
     <div class="winner-banner">
       <div class="winner-icon">&#9733;</div>
       <div class="winner-content">
-        <h3>Winning Candidate: {tr.best_name}</h3>
-        <p>{tr.best_reason}</p>
+        <h3>Winning Candidate: {html.escape(str(tr.best_name))}</h3>
+        <p>{html.escape(str(tr.best_reason))}</p>
       </div>
     </div>
     ''' if tr else ''}
