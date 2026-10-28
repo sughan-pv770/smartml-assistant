@@ -64,7 +64,7 @@ from .core import (
     wrangler as wrangler_mod,
 )
 
-__version__ = "2.0.3"
+__version__ = "2.0.4"
 __author__ = "SmartML Contributors"
 __license__ = "MIT"
 
