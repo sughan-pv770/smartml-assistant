@@ -43,3 +43,26 @@ def test_sml_clustering(classification_data, tmp_path):
     assert result.task == "clustering"
     assert result.clustering_result is not None
     assert result.clustering_result.n_clusters == 3
+
+
+def test_lazy_voice_imports_without_audio_libs():
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys\n"
+        "for mod in ('sounddevice', 'pynput', 'faster_whisper', 'win32com', 'speech_recognition', 'psutil'):\n"
+        "    sys.modules[mod] = None\n"
+        "import smartml\n"
+        "assert 'smartml.agent' not in sys.modules, 'smartml.agent eagerly imported'\n"
+        "assert 'smartml.mial' not in sys.modules, 'smartml.mial eagerly imported'\n"
+        "from smartml.core import analyzer\n"
+        "import pandas as pd\n"
+        "rep = analyzer.analyze(pd.DataFrame({'a': [1, 2, 3, 4], 'b': [0, 1, 0, 1]}), target='b')\n"
+        "assert rep.data_quality_score >= 0\n"
+        "cls = smartml.MialConfig\n"
+        "assert cls().stt_engine == 'whisper'\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+

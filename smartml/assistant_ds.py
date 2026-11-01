@@ -45,6 +45,17 @@ class DataScienceMixin:
         self.session.importance_result = None
         self.session.visualizations.clear()
 
+    def _mutate_df(self, fn: Any) -> str:
+        """Run a wrangler mutation and reset downstream models ONLY if data actually changed."""
+        self._init_ds_state()
+        w = self.session.wrangler
+        before_ver = w.version
+        msg = fn(w)
+        if w.version != before_ver:
+            self.session.raw_df = w.current_df
+            self._reset_downstream()
+        return msg
+
     def _ds_dispatch(self, text: str, norm: str, **ctx: Any) -> Optional[str]:
         """Attempt to handle text with a Data Science intent.
 
@@ -56,10 +67,32 @@ class DataScienceMixin:
 
         # 1. Undo
         if re.search(r"\bundo(\b| last)", norm):
+            if not w.can_undo:
+                return "Nothing to undo."
             msg = w.undo()
             self.session.raw_df = w.current_df
             self._reset_downstream()
             return msg
+
+        # 1b. Remove / drop outliers (wrangling action vs anomaly detection)
+        m = re.search(r"\b(remove|drop|delete|filter out)\s+outliers?(?:\s+(?:in|from|on)\s+([A-Za-z0-9_ \(\)]+))?", norm)
+        if m:
+            raw_col = m.group(2).strip() if m.group(2) else None
+            matched = None
+            if raw_col:
+                matched = textutil.fuzzy_match_column(raw_col, df.columns)
+                if not matched:
+                    return f"Couldn't find column '{raw_col}' for outlier removal."
+            return self._mutate_df(lambda wr: wr.remove_outliers(column=matched))
+
+        # 1c. Convert column type: "convert age to float"
+        m = re.search(r"\bconvert\s+(?:column\s+)?([A-Za-z0-9_ \(\)]+?)\s+to\s+(int|integer|float|numeric|number|str|string|text|category|categorical|date|datetime)\b", norm)
+        if m:
+            raw_col, target_type = m.group(1).strip(), m.group(2).strip()
+            matched = textutil.fuzzy_match_column(raw_col, df.columns)
+            if not matched:
+                return f"Couldn't find column '{raw_col}' to convert."
+            return self._mutate_df(lambda wr: wr.convert_column_type(matched, target_type))
 
         # 2. Drop column
         m = re.search(r"\bdrop column\s+([A-Za-z0-9_ \(\)]+)$", norm)
@@ -68,10 +101,7 @@ class DataScienceMixin:
             matched = textutil.fuzzy_match_column(raw_col, df.columns)
             if not matched:
                 return f"Couldn't find column '{raw_col}' to drop."
-            msg = w.drop_column(matched)
-            self.session.raw_df = w.current_df
-            self._reset_downstream()
-            return msg
+            return self._mutate_df(lambda wr: wr.drop_column(matched))
 
         # 3. Rename column
         m = re.search(r"\brename (?:column\s+)?([A-Za-z0-9_ \(\)]+)\s+to\s+([A-Za-z0-9_ \(\)]+)$", norm)
@@ -80,10 +110,7 @@ class DataScienceMixin:
             matched = textutil.fuzzy_match_column(old_raw, df.columns)
             if not matched:
                 return f"Couldn't find column '{old_raw}' to rename."
-            msg = w.rename_column(matched, new_name)
-            self.session.raw_df = w.current_df
-            self._reset_downstream()
-            return msg
+            return self._mutate_df(lambda wr: wr.rename_column(matched, new_name))
 
         # 4. Fill NA
         m = re.search(r"\bfill (?:missing|na|nulls?)(?: in)?\s+([A-Za-z0-9_ \(\)]+)\s+with\s+([A-Za-z0-9_.-]+)$", norm)
@@ -92,10 +119,7 @@ class DataScienceMixin:
             matched = textutil.fuzzy_match_column(raw_col, df.columns)
             if not matched:
                 return f"Couldn't find column '{raw_col}'."
-            msg = w.fill_na(matched, val_str)
-            self.session.raw_df = w.current_df
-            self._reset_downstream()
-            return msg
+            return self._mutate_df(lambda wr: wr.fill_na(matched, val_str))
 
         # 5. Replace value: "replace 0 with 5 in income"
         m = re.search(r"\breplace\s+([A-Za-z0-9_.-]+)\s+with\s+([A-Za-z0-9_.-]+)\s+in\s+([A-Za-z0-9_ \(\)]+)$", norm)
@@ -104,10 +128,7 @@ class DataScienceMixin:
             matched = textutil.fuzzy_match_column(raw_col, df.columns)
             if not matched:
                 return f"Couldn't find column '{raw_col}'."
-            msg = w.replace_value(matched, old_val, new_val)
-            self.session.raw_df = w.current_df
-            self._reset_downstream()
-            return msg
+            return self._mutate_df(lambda wr: wr.replace_value(matched, old_val, new_val))
 
         # 6. Filter rows: "filter rows where age > 30" or "filter rows where age is greater than 30"
         m = re.search(r"\bfilter(?: rows)?(?: where)?\s+([A-Za-z0-9_ \(\)]+?)\s*(?:is\s+)?(>=|<=|!=|==|=|>|<|contains|greater than|less than|equals? to?)\s*([A-Za-z0-9_.-]+)$", norm)
@@ -131,10 +152,7 @@ class DataScienceMixin:
             if not matched:
                 return f"Couldn't find column '{col_part}' for filtering."
 
-            msg = w.filter_rows(matched, op_symbol, val_part)
-            self.session.raw_df = w.current_df
-            self._reset_downstream()
-            return msg
+            return self._mutate_df(lambda wr: wr.filter_rows(matched, op_symbol, val_part))
 
         # 7. Correlation between two columns
         m = re.search(r"\bcorrelation between\s+([A-Za-z0-9_ \(\)]+?)\s+and\s+([A-Za-z0-9_ \(\)]+)$", norm)
@@ -165,27 +183,32 @@ class DataScienceMixin:
                 skews = [f"'{c}': {num_df[c].skew():.2f}" for c in num_df.columns[:8]]
                 return "Skewness for numeric columns:\n" + ", ".join(skews)
 
-        # 9. Describe column / summary statistics
-        m = re.search(r"\b(describe|summary statistics|five number summary|summarize|stats for|stats)(?:\s+for\s+|\s+of\s+|\s+column\s+)?([A-Za-z0-9_ \(\)]+)?", norm)
+        # 9. Describe column / summary statistics for a specific column
+        m = re.search(r"\b(describe|summary statistics|five number summary|summarize|summarise|summary|stats for|stats)(?:\s+for\s+|\s+of\s+|\s+column\s+|\s+)?([A-Za-z0-9_ \(\)]+)?$", norm)
         if m:
-            col_raw = m.group(2)
-            if col_raw and col_raw.strip():
-                matched = textutil.fuzzy_match_column(col_raw.strip(), df.columns)
-                if matched:
-                    cs = stats.summarize_column(df, matched)
-                    if cs.mean is not None:
-                        norm_str = "normal" if cs.is_normal else "non-normal"
-                        return (
-                            f"Summary for '{matched}':\n"
-                            f"  Count: {cs.count}, Missing: {cs.missing}\n"
-                            f"  Mean: {cs.mean:.2f}, Std: {cs.std:.2f}\n"
-                            f"  Min: {cs.min:.2f}, Q25: {cs.q25:.2f}, Median: {cs.median:.2f}, Q75: {cs.q75:.2f}, Max: {cs.max:.2f}\n"
-                            f"  IQR: {cs.iqr:.2f}, Skewness: {cs.skewness:.2f}, Kurtosis: {cs.kurtosis:.2f}\n"
-                            f"  Distribution: {norm_str} (Shapiro-Wilk p={cs.shapiro_p})"
-                        )
-                    return f"Column '{matched}' ({cs.dtype}): {cs.count} non-null values, {cs.unique} unique."
-            # Overall summary
-            return f"Dataset summary: {len(df)} rows, {len(df.columns)} columns. Use 'describe <column>' for in-depth stats."
+            col_raw = (m.group(2) or "").strip()
+            generic_terms = {
+                "", "data", "the data", "dataset", "the dataset",
+                "my data", "my dataset", "this data", "this dataset",
+                "table", "the table", "everything", "all",
+            }
+            if col_raw.lower() in generic_terms:
+                return None  # Fall through to core _handle_analyze
+            matched = textutil.fuzzy_match_column(col_raw, df.columns)
+            if matched:
+                cs = stats.summarize_column(df, matched)
+                if cs.mean is not None:
+                    norm_str = "normal" if cs.is_normal else "non-normal"
+                    return (
+                        f"Summary for '{matched}':\n"
+                        f"  Count: {cs.count}, Missing: {cs.missing}\n"
+                        f"  Mean: {cs.mean:.2f}, Std: {cs.std:.2f}\n"
+                        f"  Min: {cs.min:.2f}, Q25: {cs.q25:.2f}, Median: {cs.median:.2f}, Q75: {cs.q75:.2f}, Max: {cs.max:.2f}\n"
+                        f"  IQR: {cs.iqr:.2f}, Skewness: {cs.skewness:.2f}, Kurtosis: {cs.kurtosis:.2f}\n"
+                        f"  Distribution: {norm_str} (Shapiro-Wilk p={cs.shapiro_p})"
+                    )
+                return f"Column '{matched}' ({cs.dtype}): {cs.count} non-null values, {cs.unique} unique."
+            return None
 
         # 10. PCA / Dimensionality Reduction: "reduce to 3 components" or "run pca"
         m = re.search(r"\b(reduce to\s+(\d+)\s+components|run pca|pca to\s+(\d+))", norm)

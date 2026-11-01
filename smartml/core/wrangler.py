@@ -55,6 +55,7 @@ class DataWrangler:
         self.target = target
         self.max_history = max_history
         self._history: list[WranglingAction] = []
+        self.version: int = 0
 
     @property
     def history(self) -> list[WranglingAction]:
@@ -67,6 +68,7 @@ class DataWrangler:
         )
         if len(self._history) > self.max_history:
             self._history.pop(0)
+        self.version += 1
 
     @property
     def can_undo(self) -> bool:
@@ -78,6 +80,7 @@ class DataWrangler:
             return "Nothing to undo."
         last_action = self._history.pop()
         self.current_df = last_action.previous_df
+        self.version += 1
         return f"Undid: {last_action.description}. Restored {len(self.current_df)} rows and {len(self.current_df.columns)} columns."
 
     def drop_column(self, column: str) -> str:
@@ -190,3 +193,70 @@ class DataWrangler:
         self._save_state(f"Filter rows where {column} {op_str} {value}")
         self.current_df = self.current_df[mask].reset_index(drop=True)
         return f"Filtered rows: kept {n_kept} rows, dropped {dropped} row(s)."
+
+    def remove_outliers(self, column: Optional[str] = None, factor: float = 1.5) -> str:
+        """Remove IQR outliers on a specific column or across all numeric non-target columns."""
+        if column is not None:
+            if column not in self.current_df.columns:
+                return f"Column '{column}' not found."
+            cols = [column]
+        else:
+            cols = [
+                c for c in self.current_df.select_dtypes(include=["number"]).columns
+                if c != self.target
+            ]
+        if not cols:
+            return "No numeric columns available for outlier removal."
+
+        mask = pd.Series(True, index=self.current_df.index)
+        for c in cols:
+            s = self.current_df[c].dropna()
+            if len(s) < 4:
+                continue
+            q1 = s.quantile(0.25)
+            q3 = s.quantile(0.75)
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+            low = q1 - factor * iqr
+            high = q3 + factor * iqr
+            col_mask = self.current_df[c].isna() | ((self.current_df[c] >= low) & (self.current_df[c] <= high))
+            mask &= col_mask
+
+        n_kept = int(mask.sum())
+        dropped = len(self.current_df) - n_kept
+        if dropped == 0:
+            return "Removed 0 outlier row(s) — no extreme values outside the IQR fence."
+        if n_kept == 0:
+            return "Outlier removal would drop 100% of rows. Operation refused."
+
+        self._save_state(f"Remove outliers ({dropped} rows)")
+        self.current_df = self.current_df[mask].reset_index(drop=True)
+        return f"Removed {dropped} outlier row(s); {n_kept} rows remaining."
+
+    def convert_column_type(self, column: str, target_type: str) -> str:
+        """Convert a column to int, float, str/category, or datetime."""
+        if column not in self.current_df.columns:
+            return f"Column '{column}' not found."
+        t = target_type.strip().lower()
+        s = self.current_df[column]
+        try:
+            if t in ("int", "integer"):
+                converted = pd.to_numeric(s, errors="raise").astype("int64")
+            elif t in ("float", "numeric", "number", "double"):
+                converted = pd.to_numeric(s, errors="raise").astype("float64")
+            elif t in ("str", "string", "text", "category", "categorical"):
+                converted = s.astype(str)
+            elif t in ("date", "datetime", "timestamp"):
+                converted = pd.to_datetime(s, errors="raise")
+            else:
+                return f"Unsupported type '{target_type}'. Choose int, float, string, or datetime."
+        except Exception as exc:
+            return f"Could not convert '{column}' to {target_type}: {exc}"
+
+        if s.dtype == converted.dtype and s.equals(converted):
+            return f"Column '{column}' is already of type {converted.dtype}."
+
+        self._save_state(f"Convert '{column}' to {target_type}")
+        self.current_df[column] = converted
+        return f"Converted column '{column}' to {converted.dtype}."

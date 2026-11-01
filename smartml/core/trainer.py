@@ -266,7 +266,13 @@ class Trainer:
         import time
 
         stratify = (
-            y if self.task == "classification" and y.nunique() > 1 else None
+            y
+            if (
+                self.task == "classification"
+                and y.nunique() > 1
+                and int(y.value_counts().min()) >= 2
+            )
+            else None
         )
         X_train, X_test, y_train, y_test = train_test_split(
             X, y,

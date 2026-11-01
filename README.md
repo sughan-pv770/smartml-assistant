@@ -151,6 +151,23 @@ print(ai.ask("do everything"))  # profiles, cleans, trains, explains, and builds
 
 ---
 
+### 9. Mial Voice Assistant (`mial`)
+Launch the hotkey-triggered voice assistant for SmartML (`pip install "smartml-assistant[voice]"`):
+
+```bash
+mial                    # Launch desktop popup UI (wake hotkey: Ctrl+Alt+M)
+mial --offline          # Run 100% locally with zero outbound cloud LLM calls
+mial --text             # Interactive typed English terminal mode
+mial --benchmark        # Measure real SAPI5 first-audio & barge-in latency
+```
+
+**Privacy & Data Boundaries:**
+- **Speech-to-text is offline by default:** Audio is captured in RAM and transcribed locally with `faster-whisper` (the ~150 MB model downloads once on first voice use and caches locally). Online Google STT is never called unless `--online-stt` is explicitly passed.
+- **Cloud LLM summaries vs. offline mode:** When `NVIDIA_API_KEY` is configured (and `--offline` is not set), Mial sends your spoken transcript and **aggregate SmartML tool summaries** (row/column counts, column schemas, model metrics, and feature importances — never raw audio or raw DataFrame cell values) to NVIDIA NIM (`Nemotron`). Pass `--offline` (or unset `NVIDIA_API_KEY`) to keep every step strictly on your machine.
+- **File & model safety:** Dataset loading is restricted to configured `allowed_dirs` (`Path.resolve()` + `is_relative_to()`), and voice model loading requires a verified `.sha256` sidecar inside Mial's trusted `output_dir`.
+
+---
+
 ## 📊 Viewing the HTML Report in Jupyter / Google Colab
 
 ```python

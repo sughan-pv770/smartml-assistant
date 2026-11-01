@@ -59,3 +59,20 @@ def test_wrangler_replace_and_fill(sample_df):
     replace_msg = w.replace_value("city", "Paris", "Rome")
     assert "Replaced 1 occurrence" in replace_msg
     assert "Rome" in w.current_df["city"].values
+
+
+def test_wrangler_version_counter_increments_beyond_max_history(sample_df):
+    w = DataWrangler(sample_df, target="target", max_history=3)
+    assert w.version == 0
+    for i in range(6):
+        cur = w.current_df.loc[0, "city"]
+        w.replace_value("city", cur, f"City_{i}")
+    assert len(w.history) == 3
+    assert w.version == 6
+    # No-op must not advance version counter
+    w.replace_value("city", "NonExistentCity", "Other")
+    assert w.version == 6
+    # Undo advances version counter so downstream caches know data changed
+    w.undo()
+    assert w.version == 7
+

@@ -34,8 +34,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import webbrowser
 import datetime as dt
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
@@ -53,6 +55,7 @@ from .core import (
     clustering,
     anomaly,
     loaders,
+    textutil,
 )
 from .assistant_ds import DataScienceMixin
 
@@ -134,25 +137,28 @@ _INTENT_PATTERNS: list[tuple[str, str]] = [
                                                                    "_handle_feature_engineer"),
     (r"\bselect\b.*\bfeature|\bfeature.*\bselect|\breduce features\b",
                                                                    "_handle_feature_select"),
-    (r"\banaly[sz]e\b|\bsummar[yi]ze?\b|\bdescribe (the )?(data|dataset)\b|\bprofile\b",
+    (r"\banaly[sz]e\b|\bsummar(?:y|i[sz]e)\b|\bdescribe (the )?(data|dataset)\b|\bprofile\b|\beda\b",
                                                                    "_handle_analyze"),
-    (r"\bwhy\b.*\b(choose|chose|pick|picked|select|selected)\b"
-     r"|\bexplain.*(choice|model|decision)\b|\bjustify\b",         "_handle_explain_choice"),
-    (r"\bfeature importan",                                        "_handle_feature_importance"),
-    (r"\bcluster",                                                  "_handle_clustering"),
+    (r"\bwhy\b.*\b(choose|chose|pick|picked|select|selected|win|won|best)\b"
+     r"|\bexplain.*(choice|model|decision|winner)\b|\bjustify\b",  "_handle_explain_choice"),
+    (r"\bfeature importan|\bwhat matters most\b|\bmost important\b"
+     r"|\btop (?:feature|predictor|driver|factor)s?\b|\bwhat drives\b",
+                                                                   "_handle_feature_importance"),
+    (r"\bcluster|\bsegment\b|\bgroup\b.*\binto\b",                 "_handle_clustering"),
     (r"\banomaly|\bdetect outliers\b|\boutlier detect",             "_handle_anomaly"),
-    (r"\b(predict|inference|score)\b",                             "_handle_predict"),
+    (r"\b(generate|build|create|make|export|show|open|view|display)\b.*\breport\b|^report$",
+                                                                   "_handle_report"),
     (r"\bsave\b.*\bmodel\b|\bexport\b.*\bmodel\b",                 "_handle_save_model"),
     (r"\bload\b.*\bmodel\b",                                       "_handle_load_model"),
     (r"\b(visuali[sz]e|plot|chart|show)\b.*"
      r"\b(heatmap|correlation|confusion|residual|comparison|importance|roc|pr curve)\b",
                                                                    "_handle_visualize"),
     (r"\bvisuali[sz]e\b|\bplot\b|\bchart\b",                       "_handle_visualize"),
-    (r"\b(generate|build|create|make|export)\b.*\breport\b|^report$",
-                                                                   "_handle_report"),
     (r"\b(do everything|full pipeline|run all|end to end)\b",      "_handle_do_everything"),
     (r"\btrain\b|\bfind\b.*\b(best )?model\b|\bbuild\b.*\bmodel\b"
-     r"|\bbest model\b|\bfit\b.*\bmodel\b",                        "_handle_train"),
+     r"|\bbest model\b|\bfit\b.*\bmodel\b|\bcompare\b.*\bmodels?\b",
+                                                                   "_handle_train"),
+    (r"\b(predict|inference|score)\b",                             "_handle_predict"),
 ]
 
 _FORMAT_PATTERNS = {
@@ -204,6 +210,25 @@ class Assistant(DataScienceMixin):
     def set_target(self, target: str) -> str:
         """Sets the target column for machine learning."""
         return self.ask(f"set target to {target}")
+
+    def chat(self, text: str, **context: Any) -> str:
+        """Alias for :meth:`ask` used by voice agent and interactive runners."""
+        return self.ask(text, **context)
+
+    def _extract_target(self, text: str) -> Optional[str]:
+        """Extract and fuzzy-match an inline target column from phrases like 'to predict <col>'."""
+        patterns = [
+            r"\b(?:to\s+predict|predicting|for\s+predicting|target(?:ing)?(?:\s+is|\s+to)?)\s+([A-Za-z0-9_ \(\)\-]+)$",
+            r"\bmodel\s+for\s+([A-Za-z0-9_ \(\)\-]+)$",
+        ]
+        for pat in patterns:
+            m = re.search(pat, text.strip(), re.IGNORECASE)
+            if m:
+                candidate = m.group(1).strip().rstrip("?.!")
+                matched = textutil.fuzzy_match_column(candidate, self.session.raw_df.columns)
+                if matched:
+                    return matched
+        return None
 
     def ask(self, text: str, **context: Any) -> str:
         """Send a natural-language command to the assistant.
@@ -336,18 +361,25 @@ class Assistant(DataScienceMixin):
         col = ctx.get("target")
         if col is None:
             m = re.search(
-                r"target(?:\s+(?:is|to))?[:\s]+([A-Za-z0-9_ ]+)$",
+                r"target(?:\s+(?:is|to))?[:\s]+([A-Za-z0-9_ \(\)\-]+)$",
                 text.strip(), re.IGNORECASE,
             )
-            col = m.group(1).strip() if m else None
-        if not col or col not in self.session.raw_df.columns:
+            col = m.group(1).strip().rstrip("?.!") if m else None
+        matched = (
+            col if col in self.session.raw_df.columns
+            else textutil.fuzzy_match_column(col or "", self.session.raw_df.columns)
+        )
+        if not matched:
             available = ", ".join(self.session.raw_df.columns[:15])
             suffix = "..." if len(self.session.raw_df.columns) > 15 else ""
             return (
                 f"I couldn't find that column. "
                 f"Available columns include: {available}{suffix}."
             )
+        col = matched
         self.session.target = col
+        if self.session.wrangler is not None:
+            self.session.wrangler.target = col
         self.session.dataset_report = analyzer.analyze(self.session.raw_df, target=col)
         # Reset downstream artifacts since the target definition changed
         self.session.cleaning_result = None
@@ -459,6 +491,10 @@ class Assistant(DataScienceMixin):
         )
 
     def _handle_train(self, text: str, norm: str, **ctx: Any) -> str:
+        inline_target = ctx.get("target") or self._extract_target(text)
+        if inline_target and inline_target != self.session.target:
+            self._handle_set_target(f"set target to {inline_target}", f"set target to {inline_target.lower()}", target=inline_target)
+
         if not self.session.target:
             return (
                 "I need a target column first — "
@@ -519,6 +555,10 @@ class Assistant(DataScienceMixin):
 
     def _handle_do_everything(self, text: str, norm: str, **ctx: Any) -> str:
         """Run the full end-to-end pipeline: analyze, clean, train, importance, plots, report, save."""
+        inline_target = ctx.get("target") or self._extract_target(text)
+        if inline_target and inline_target != self.session.target:
+            self._handle_set_target(f"set target to {inline_target}", f"set target to {inline_target.lower()}", target=inline_target)
+
         if not self.session.target:
             return "I need a target column first — try \"set target to <column name>\"."
 
@@ -767,6 +807,11 @@ class Assistant(DataScienceMixin):
             os.path.join(self.session.output_dir, "report.html"),
         )
         self.session.report_paths["html"] = path
+        if re.search(r"\b(show|open|view|display)\b", norm) and ctx.get("open_browser", True):
+            try:
+                webbrowser.open(Path(path).resolve().as_uri())
+            except Exception:
+                pass
         return f"HTML report generated: {path}"
 
     def _handle_save_model(self, text: str, norm: str, **ctx: Any) -> str:
@@ -796,12 +841,21 @@ class Assistant(DataScienceMixin):
     def _handle_load_model(self, text: str, norm: str, **ctx: Any) -> str:
         path = ctx.get("path")
         if not path:
-            m = _PATH_RE.search(text)
+            m = re.search(r"[\w\-./\\:]+\.joblib", text, re.IGNORECASE) or _PATH_RE.search(text)
             path = (
                 m.group(0) if m
                 else os.path.join(self.session.output_dir, "model.joblib")
             )
-        bundle = persistence.load_model(path)
+        trusted_dir = ctx.get("trusted_dir", self.session.output_dir if ctx.get("strict_security") else None)
+        require_sha256 = bool(ctx.get("require_sha256", False) or ctx.get("strict_security", False))
+        try:
+            bundle = persistence.load_model(
+                path,
+                trusted_dir=trusted_dir,
+                require_sha256=require_sha256,
+            )
+        except (PermissionError, ValueError, FileNotFoundError) as exc:
+            return f"Could not load model: {exc}"
         self.session.loaded_bundle = bundle
         return (
             f"Loaded '{bundle.model_name}' ({bundle.task}) trained for target "

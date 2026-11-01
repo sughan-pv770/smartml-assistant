@@ -64,7 +64,7 @@ from .core import (
     wrangler as wrangler_mod,
 )
 
-__version__ = "2.0.4"
+__version__ = "2.1.0"
 __author__ = "SmartML Contributors"
 __license__ = "MIT"
 
@@ -84,10 +84,14 @@ __all__ = [
     "self_supervised",
     "forecast",
     "load",
-    # Core classes
+    # Core classes & Voice Agent / Mial
     "Assistant",
     "Session",
     "SmartMLResult",
+    "VoiceAgent",
+    "SmartMLAgent",
+    "MialController",
+    "MialConfig",
     # Submodules
     "analyzer",
     "preprocessor",
@@ -573,4 +577,16 @@ def forecast(
     """
     fc = forecaster_mod.TabularForecaster(**kwargs)
     return fc.forecast(data, target_col=target, date_col=date_col, horizon=horizon)
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy-load voice and Mial symbols so importing smartml needs zero audio libraries."""
+    if name in ("VoiceAgent", "SmartMLAgent"):
+        from . import agent as _agent_pkg
+        return getattr(_agent_pkg, name)
+    if name in ("MialController", "MialConfig"):
+        from . import mial as _mial_pkg
+        return getattr(_mial_pkg, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 

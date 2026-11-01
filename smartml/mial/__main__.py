@@ -1,0 +1,13 @@
+"""Entry point for ``python -m smartml.mial``."""
+
+from __future__ import annotations
+
+import multiprocessing
+import sys
+
+from .cli import main
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    sys.exit(main())
+
