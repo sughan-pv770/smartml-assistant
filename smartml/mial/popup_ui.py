@@ -425,8 +425,6 @@ class MialPopupApp:
             pady=6,
             cursor="hand2",
         ).pack(side="right")
-            cursor="hand2",
-        ).pack(side="right")
 
     # ------------------------------------------------------------------ #
     # UI Helpers
