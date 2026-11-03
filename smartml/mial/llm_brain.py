@@ -40,16 +40,21 @@ You are **Mial**, a friendly voice assistant for **SmartML**, Sughan's data-scie
 
 You are an AI assistant. Do not pretend to be a person. If asked, say you are Mial, a voice assistant built on SmartML.
 
-## B2. What you can do (only through tools)
+## B2. What you can do
 
-You act ONLY by calling the tools the program gives you. Typical tools:
-- `load_dataset(name)` - find and load a data file from the allowed folders.
-- `set_target(column)` - choose the column to predict.
-- `ask_smartml(command)` - run one SmartML command in plain English (explore data, clean, train, tune, evaluate, importance, cluster, anomalies, PCA, forecast, plots, report, save model, predict).
-- `run_full_pipeline()` - analyse, clean, train, importance, plots, report and save the model.
-- `get_status()`, `open_report()`, `undo()`, `stop()`.
+1. **SmartML Tasks**: When the user wants to work with data, you act through tools:
+   - `load_dataset(name)` - find and load a data file from allowed folders.
+   - `set_target(column)` - choose the column to predict.
+   - `ask_smartml(command)` - run SmartML commands in plain English (explore data, clean, train 9 models, tune, evaluate, importance, cluster, anomalies, PCA, forecast, plots, report, save model, predict).
+   - `run_full_pipeline()` - analyse, clean, train, importance, plots, report and save the model.
+   - `get_status()`, `open_report()`, `undo()`, `stop()`.
 
-If a request needs something not in your tools, say you cannot do that yet. Never claim an action you did not perform.
+2. **AI & ML Expert Answers & General Conversations**:
+   - When asked questions about Artificial Intelligence, Machine Learning, algorithms, data science concepts, metrics, best practices, or general questions (like introducing yourself, your features, tips for the hackathon, or questions from the judges), answer them directly, intelligently, and helpfully!
+   - You do NOT need tools to answer conceptual or general knowledge questions.
+   - Keep spoken answers concise (under 3 short sentences, under 280 characters), while full detailed explanations are displayed on the screen.
+
+If a request asks for a data action not supported by your tools, say you cannot do that yet. Never claim an action on data you did not perform.
 
 ## B3. The most important rules
 
@@ -435,7 +440,7 @@ class MialLLMBrain:
                     spoken = clean_spoken_reply(self._offline_speech_from_results(executed_records))
                 if not spoken:
                     return None
-                screen = self._build_screen_summary(executed_records, spoken)
+                screen = content if (content and not executed_records) else self._build_screen_summary(executed_records, spoken)
                 self._remember_and_log(user_text, executed_records, spoken)
                 return BrainResponse(
                     display_text=screen,
@@ -519,7 +524,7 @@ class MialLLMBrain:
         final_msg = self._call_nvidia_chat(messages, tools=None)
         final_text = _strip_think_tags(str((final_msg or {}).get("content") or ""))
         spoken = clean_spoken_reply(final_text or self._offline_speech_from_results(executed_records))
-        screen = self._build_screen_summary(executed_records, spoken)
+        screen = final_text if (final_text and not executed_records) else self._build_screen_summary(executed_records, spoken)
         self._remember_and_log(user_text, executed_records, spoken)
         return BrainResponse(
             display_text=screen,
@@ -578,6 +583,12 @@ class MialLLMBrain:
                 calls.append({"tool": "set_target", "args": {"column": m_pred.group(1).strip()}})
                 calls.append({"tool": "ask_smartml", "args": {"command": "train the best model"}})
         elif not loaded:
+            if any(w in low for w in ("who are you", "what are you", "what can you do", "introduce yourself", "hello", "hi", "hey")):
+                msg = "Hi, I am Mial, your voice-first AI Data Science assistant for SmartML created by Sughan. I can clean data, compare nine machine learning models, tune hyperparameters, explain feature importance, and generate visual reports. What would you like to do?"
+                return BrainResponse(display_text=msg, speech_text=msg, status_badge="READY", emoji_state="READY", intent="chat")
+            if any(w in low for w in ("what models", "which models", "algorithms", "what algorithms")):
+                msg = "SmartML trains and compares nine algorithms: Histogram Gradient Boosting, Random Forest, Extra Trees, XGBoost, LightGBM, CatBoost, Logistic Regression, Decision Trees, and Naive Bayes."
+                return BrainResponse(display_text=msg, speech_text=msg, status_badge="READY", emoji_state="READY", intent="chat")
             msg = "No dataset is loaded yet. Tell me the dataset name to load, or click Load Dataset."
             return BrainResponse(display_text=msg, speech_text=msg, intent="data")
         elif re.match(r"^predict\s+([a-z0-9_ ]+)[.!?]*$", low) and "." not in low.rstrip(".!?"):
