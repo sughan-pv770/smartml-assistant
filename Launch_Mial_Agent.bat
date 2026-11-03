@@ -19,3 +19,4 @@ if %errorlevel% neq 0 (
     echo python -m smartml.mial
     pause
 )
+

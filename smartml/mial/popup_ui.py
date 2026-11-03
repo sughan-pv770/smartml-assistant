@@ -78,6 +78,7 @@ class MialPopupApp:
         self.root.geometry(f"600x740+{x_pos}+{y_pos}")
 
         self._build_ui(tk, ttk)
+        threading.Thread(target=self._prewarm_stt, daemon=True).start()
 
         self._hotkey_listener: Optional[HotkeyListener] = None
         try:
@@ -553,12 +554,11 @@ class MialPopupApp:
 
     def _wake_and_capture_worker(self) -> None:
         try:
+            beep(880, 80)
             if not self._greeted_once:
                 self._greeted_once = True
                 if self.controller.config.speak_replies:
-                    self.controller.speaker.speak(self.controller.config.greeting, wait=True)
-            else:
-                beep(880, 90)
+                    threading.Thread(target=self.controller.speaker.speak, args=(self.controller.config.greeting, False), daemon=True).start()
 
             wav_bytes = self.controller.agent.recorder.record_utterance(timeout_s=7.0)
             if not wav_bytes:
@@ -675,3 +675,9 @@ class MialPopupApp:
             pass
         self.root.destroy()
 
+
+    def _prewarm_stt(self) -> None:
+        try:
+            self.controller.agent.stt._load_whisper()
+        except Exception:
+            pass

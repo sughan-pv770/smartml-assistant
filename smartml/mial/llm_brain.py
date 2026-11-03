@@ -321,6 +321,30 @@ class MialLLMBrain:
         except Exception:
             return False
 
+    def _is_direct_tool_command(self, user_text: str) -> bool:
+        """Fast-path detector for standard SmartML operations and UI action buttons."""
+        low = user_text.lower().strip(" .!?")
+        direct_phrases = {
+            "summary", "summary of the data", "summarize", "summarise", "data summary", "describe data",
+            "clean & train", "clean my dataset and train the best model", "train", "train the best model",
+            "train best model", "train models", "train model", "build model", "build models",
+            "tune", "tune the winning model", "tune model", "tune winner",
+            "why winner", "why did that model win", "why did that model win?", "why winner?",
+            "importance", "what matters most", "what matters most?", "feature importance",
+            "report", "show me the report", "show report", "open report", "view report",
+            "full pipeline", "run full pipeline", "do everything",
+            "get status", "status", "what is loaded",
+            "remove outliers", "remove duplicate", "remove duplicates", "drop duplicates",
+            "who are you", "what can you do", "introduce yourself",
+        }
+        if low in direct_phrases:
+            return True
+        if re.match(r"^(load|open)\s+(?:dataset\s+|file\s+|data\s+)?['\"]?[\w\-. ]+['\"]?$", low):
+            return True
+        if re.match(r"^(set\s+target|predict|target)\s+(?:is\s+|to\s+)?['\"]?[\w\- ]+['\"]?$", low):
+            return True
+        return False
+
     def inspect_dataset_schema(self) -> dict[str, Any]:
         return self.executor.execute_one("get_status", {})
 
@@ -382,6 +406,12 @@ class MialLLMBrain:
                 emoji_state="READY",
                 intent="clean",
             )
+
+        # Turbo Fast-Path: Instant local deterministic execution for standard SmartML actions (< 50 ms)
+        if self._is_direct_tool_command(cleaned):
+            fast_resp = self._run_offline_fallback(cleaned, runner=runner, on_interim=on_interim)
+            self.last_spoken_reply = fast_resp.speech_text
+            return fast_resp
 
         # Primary path: NVIDIA Nemotron native OpenAI function-calling loop (when not offline_only)
         if self.nvidia_api_key and not self.offline_only:
@@ -802,3 +832,28 @@ class MialLLMBrain:
                 _log.debug("NVIDIA NIM (%s) request failed: %s", model_id, exc)
         return None
 
+
+
+    def _call_gemini_chat(self, user_text: str) -> Optional[dict[str, Any]]:
+        """Ultra-fast Google Gemini Flash client (free tier, ~300 ms latency)."""
+        if not self.gemini_api_key:
+            return None
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.gemini_api_key}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+            "systemInstruction": {"parts": [{"text": MIAL_SYSTEM_PROMPT}]},
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024},
+        }
+        try:
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                candidates = data.get("candidates") or []
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return {"role": "assistant", "content": parts[0].get("text", "")}
+        except Exception as exc:
+            _log.debug("Gemini request failed: %s", exc)
+        return None

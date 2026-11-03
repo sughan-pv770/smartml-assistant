@@ -45,9 +45,9 @@ class EnergyVAD:
     def __init__(
         self,
         energy_threshold: float = 0.015,
-        silence_duration_s: float = 1.0,
+        silence_duration_s: float = 0.6,
         max_duration_s: float = 15.0,
-        no_speech_timeout_s: float = 6.0,
+        no_speech_timeout_s: float = 4.0,
     ) -> None:
         self.energy_threshold = energy_threshold
         self.silence_duration_s = silence_duration_s
@@ -210,7 +210,7 @@ class SpeechToText:
             segments, _ = model.transcribe(
                 io.BytesIO(wav_bytes),
                 language=self.language,
-                beam_size=3,
+                beam_size=1,
                 vad_filter=True,
             )
             return " ".join(seg.text.strip() for seg in segments).strip()
